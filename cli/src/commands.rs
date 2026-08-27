@@ -170,6 +170,7 @@ pub fn is_top_level_command(value: &str) -> bool {
             | "install"
             | "upgrade"
             | "profiles"
+            | "seed"
             | "skills"
             | "dashboard"
             | "plugin"
@@ -3188,6 +3189,7 @@ mod tests {
             enable: Vec::new(),
             cdp: None,
             profile: None,
+            seed: None,
             state: None,
             proxy: None,
             proxy_bypass: None,
@@ -3217,6 +3219,8 @@ mod tests {
             cli_init_scripts: false,
             cli_enable: false,
             cli_profile: false,
+            cli_seed: false,
+            cli_no_seed: false,
             cli_state: false,
             cli_args: false,
             cli_user_agent: false,

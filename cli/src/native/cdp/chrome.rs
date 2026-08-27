@@ -331,6 +331,9 @@ pub struct LaunchOptions {
     pub proxy_username: Option<String>,
     pub proxy_password: Option<String>,
     pub profile: Option<String>,
+    /// Frozen login snapshot from `agent-browser seed save`. Cloned to a temp
+    /// user-data-dir at launch so parallel sessions start identical and isolated.
+    pub seed: Option<String>,
     pub args: Vec<String>,
     pub allow_file_access: bool,
     pub extensions: Option<Vec<String>>,
@@ -392,6 +395,7 @@ impl Default for LaunchOptions {
             proxy_username: None,
             proxy_password: None,
             profile: None,
+            seed: None,
             args: Vec::new(),
             allow_file_access: false,
             extensions: None,
@@ -698,29 +702,36 @@ fn terminate_launched_chrome(child: &mut Child) {
 }
 
 pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
-    let chrome_path = match &options.executable_path {
-        Some(p) => PathBuf::from(p),
-        None => find_chrome().ok_or_else(|| {
-            let cache_dir = crate::install::get_browsers_dir();
-            format!(
-                "Chrome not found. Checked:\n  \
-                 - agent-browser cache: {}\n  \
-                 - System Chrome installations\n  \
-                 - Puppeteer browser cache\n  \
-                 - Playwright browser cache\n\
-                 Run `agent-browser install` to download Chrome, or use --executable-path.",
-                cache_dir.display()
-            )
-        })?,
-    };
-
-    // Profile name preprocessing: if --profile is a Chrome profile name (not a
-    // path), resolve it to a directory, copy the profile to a temp dir, and
-    // rewrite options so the retry loop uses the copied profile.
+    // Seed / named Chrome profile preprocessing: clone login state into a temp
+    // user-data-dir so the original is never written, and prefer the real
+    // Google Chrome binary so macOS can decrypt cookies (#1502).
+    // Resolve the executable *after* this rewrite — otherwise seeded launches
+    // still start Chrome for Testing and CDP handshake fails.
     let mut resolved_options: Option<LaunchOptions> = None;
     let mut profile_temp_dir: Option<PathBuf> = None;
 
-    if let Some(ref profile) = options.profile {
+    if options.seed.is_some() && options.profile.is_some() {
+        return Err(crate::seed::conflict_error(
+            options.seed.as_deref(),
+            options.profile.as_deref(),
+            false,
+            false,
+        ));
+    }
+
+    if let Some(ref seed) = options.seed {
+        let (temp_path, meta) = crate::seed::clone_seed_to_temp(seed)?;
+        let mut opts = options.clone();
+        opts.profile = Some(temp_path.display().to_string());
+        opts.seed = None;
+        opts.use_real_keychain = true;
+        opts.args
+            .push(format!("--profile-directory={}", meta.profile_directory));
+        prefer_system_chrome_for_real_profile(&mut opts);
+        strip_session_restore(&temp_path, &meta.profile_directory);
+        profile_temp_dir = Some(temp_path);
+        resolved_options = Some(opts);
+    } else if let Some(ref profile) = options.profile {
         if is_chrome_profile_name(profile) {
             let user_data_dir = find_chrome_user_data_dir().ok_or_else(|| {
                 "No Chrome user data directory found. Cannot resolve profile name.\n\
@@ -734,12 +745,15 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
             opts.profile = Some(temp_path.display().to_string());
             opts.use_real_keychain = true;
             opts.args.push(format!("--profile-directory={}", resolved));
+            prefer_system_chrome_for_real_profile(&mut opts);
+            strip_session_restore(&temp_path, &resolved);
             profile_temp_dir = Some(temp_path);
             resolved_options = Some(opts);
         }
     }
 
     let effective_options = resolved_options.as_ref().unwrap_or(options);
+    let chrome_path = resolve_chrome_executable(effective_options)?;
 
     let max_attempts = 3;
     let mut last_err = String::new();
@@ -965,6 +979,24 @@ fn wait_for_ws_url_until(
     ))
 }
 
+fn resolve_chrome_executable(options: &LaunchOptions) -> Result<PathBuf, String> {
+    match &options.executable_path {
+        Some(p) => Ok(PathBuf::from(p)),
+        None => find_chrome().ok_or_else(|| {
+            let cache_dir = crate::install::get_browsers_dir();
+            format!(
+                "Chrome not found. Checked:\n  \
+                 - agent-browser cache: {}\n  \
+                 - System Chrome installations\n  \
+                 - Puppeteer browser cache\n  \
+                 - Playwright browser cache\n\
+                 Run `agent-browser install` to download Chrome, or use --executable-path.",
+                cache_dir.display()
+            )
+        }),
+    }
+}
+
 fn chrome_launch_error(message: &str, stderr_lines: &[String]) -> String {
     let relevant: Vec<&String> = stderr_lines
         .iter()
@@ -1021,6 +1053,68 @@ fn chrome_launch_error(message: &str, stderr_lines: &[String]) -> String {
             .join("\n  "),
         hint
     )
+}
+
+/// Real Google Chrome (not Chrome for Testing). Needed to decrypt cookies
+/// copied from a desktop Chrome profile on macOS (#1502).
+pub fn find_system_google_chrome() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let p = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for name in ["google-chrome", "google-chrome-stable"] {
+            if let Ok(output) = Command::new("which").arg(name).output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !path.is_empty() {
+                        return Some(PathBuf::from(path));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ];
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let chrome = PathBuf::from(&local).join(r"Google\Chrome\Application\chrome.exe");
+            if chrome.exists() {
+                return Some(chrome);
+            }
+        }
+        for c in &candidates {
+            let p = PathBuf::from(c);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn prefer_system_chrome_for_real_profile(opts: &mut LaunchOptions) {
+    if opts.executable_path.is_some() {
+        return;
+    }
+    match find_system_google_chrome() {
+        Some(path) => opts.executable_path = Some(path.display().to_string()),
+        None => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "Warning: --profile/--seed copied desktop Chrome cookies, but Google Chrome was not found.\n\
+                 Chrome for Testing cannot decrypt those cookies on macOS (Chromium Safe Storage vs Chrome Safe Storage).\n\
+                 Install Google Chrome or pass --executable-path."
+            );
+        }
+    }
 }
 
 pub fn find_chrome() -> Option<PathBuf> {
@@ -1395,7 +1489,44 @@ const PROFILE_COPY_EXCLUDE_DIRS: &[&str] = &[
     "optimization_guide",
     "ShaderCache",
     "component_crx_cache",
+    "Sessions",
 ];
+
+/// Files that break parallel launches or restore leftover tabs into the clone.
+const PROFILE_COPY_EXCLUDE_FILES: &[&str] = &[
+    "seed.json",
+    "SingletonLock",
+    "SingletonCookie",
+    "SingletonSocket",
+    "DevToolsActivePort",
+    "LOCK",
+    "Current Session",
+    "Last Session",
+    "Current Tabs",
+    "Last Tabs",
+];
+
+/// True when a profile copy should skip this directory or file name.
+pub fn skip_copied_profile_entry(name: &str) -> bool {
+    PROFILE_COPY_EXCLUDE_DIRS.contains(&name) || PROFILE_COPY_EXCLUDE_FILES.contains(&name)
+}
+
+/// Drop lockfiles and session-restore files so a cloned profile starts empty
+/// (no leftover tabs) and Chrome does not think another instance owns it.
+pub fn strip_session_restore(user_data_dir: &Path, profile_directory: &str) {
+    for name in PROFILE_COPY_EXCLUDE_FILES {
+        let _ = std::fs::remove_file(user_data_dir.join(name));
+    }
+    let _ = std::fs::remove_dir_all(user_data_dir.join("Sessions"));
+    let profile = user_data_dir.join(profile_directory);
+    if !profile.is_dir() {
+        return;
+    }
+    for name in PROFILE_COPY_EXCLUDE_FILES {
+        let _ = std::fs::remove_file(profile.join(name));
+    }
+    let _ = std::fs::remove_dir_all(profile.join("Sessions"));
+}
 
 /// Copies a Chrome profile subdirectory and `Local State` to a temp directory
 /// with a two-level structure suitable for `--user-data-dir`. Returns the temp
@@ -1410,12 +1541,22 @@ pub fn copy_chrome_profile(
 ) -> Result<PathBuf, String> {
     let temp_dir =
         std::env::temp_dir().join(format!("agent-browser-profile-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Failed to create temp profile dir: {}", e))?;
+    copy_chrome_profile_into(user_data_dir, profile_directory, &temp_dir)?;
+    Ok(temp_dir)
+}
 
-    // Copy Local State (non-fatal if missing or unreadable)
+/// Copies a Chrome profile into `dest`, creating the directory if needed.
+/// `dest` becomes a user-data-dir containing `Local State` and `profile_directory`.
+pub fn copy_chrome_profile_into(
+    user_data_dir: &Path,
+    profile_directory: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dest)
+        .map_err(|e| format!("Failed to create profile dir {}: {}", dest.display(), e))?;
+
     let local_state_src = user_data_dir.join("Local State");
-    if let Err(e) = std::fs::copy(&local_state_src, temp_dir.join("Local State")) {
+    if let Err(e) = std::fs::copy(&local_state_src, dest.join("Local State")) {
         let _ = writeln!(
             std::io::stderr(),
             "Warning: could not copy Local State from {}: {}",
@@ -1424,22 +1565,21 @@ pub fn copy_chrome_profile(
         );
     }
 
-    // Copy profile subdirectory
     let src_profile = user_data_dir.join(profile_directory);
     if !src_profile.is_dir() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(dest);
         return Err(format!(
             "Profile directory not found: {}",
             src_profile.display()
         ));
     }
-    let dst_profile = temp_dir.join(profile_directory);
+    let dst_profile = dest.join(profile_directory);
     if let Err(e) = copy_dir_recursive(&src_profile, &dst_profile) {
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(dest);
         return Err(format!("Failed to copy profile: {}", e));
     }
 
-    Ok(temp_dir)
+    Ok(())
 }
 
 /// Recursively copies a directory, skipping entries in [`PROFILE_COPY_EXCLUDE_DIRS`].
@@ -1483,10 +1623,11 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
             }
         };
 
+        if skip_copied_profile_entry(name_str.as_ref()) {
+            continue;
+        }
+
         if file_type.is_dir() {
-            if PROFILE_COPY_EXCLUDE_DIRS.contains(&name_str.as_ref()) {
-                continue;
-            }
             copy_dir_recursive(&src_path, &dst_path)?;
         } else if let Err(e) = std::fs::copy(&src_path, &dst_path) {
             let _ = writeln!(
@@ -2491,6 +2632,116 @@ mod tests {
         assert!(err.contains("Ambiguous"));
         assert!(err.contains("Default"));
         assert!(err.contains("Profile 1"));
+    }
+
+    #[test]
+    fn test_copy_chrome_profile_into_copies_cookies_file() {
+        let src = TempDir::new("copy-src");
+        create_fake_local_state(&src, &[("Default", "Person 1")]);
+        let profile_dir = src.join("Default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("Cookies"), b"cookie-db").unwrap();
+
+        let dest = TempDir::new("copy-dest");
+        copy_chrome_profile_into(&src, "Default", &dest).unwrap();
+        assert_eq!(
+            std::fs::read(dest.join("Default").join("Cookies")).unwrap(),
+            b"cookie-db"
+        );
+        assert!(dest.join("Local State").is_file());
+    }
+
+    #[test]
+    fn test_resolve_chrome_executable_uses_explicit_path() {
+        let opts = LaunchOptions {
+            executable_path: Some("/custom/chrome".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_chrome_executable(&opts).unwrap(),
+            PathBuf::from("/custom/chrome")
+        );
+    }
+
+    #[test]
+    fn test_prefer_system_chrome_sets_executable_when_unset() {
+        let mut opts = LaunchOptions::default();
+        prefer_system_chrome_for_real_profile(&mut opts);
+        match find_system_google_chrome() {
+            Some(path) => {
+                assert_eq!(
+                    opts.executable_path.as_deref(),
+                    Some(path.display().to_string()).as_deref()
+                );
+                assert_eq!(resolve_chrome_executable(&opts).unwrap(), path);
+            }
+            None => assert!(opts.executable_path.is_none()),
+        }
+    }
+
+    #[test]
+    fn test_prefer_system_chrome_preserves_explicit_executable() {
+        let mut opts = LaunchOptions {
+            executable_path: Some("/custom/chrome".to_string()),
+            ..Default::default()
+        };
+        prefer_system_chrome_for_real_profile(&mut opts);
+        assert_eq!(opts.executable_path.as_deref(), Some("/custom/chrome"));
+        assert_eq!(
+            resolve_chrome_executable(&opts).unwrap(),
+            PathBuf::from("/custom/chrome")
+        );
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_skips_session_restore_files() {
+        let src = TempDir::new("copy-session-src");
+        let dst = TempDir::new("copy-session-dst");
+        std::fs::create_dir_all(&*src).unwrap();
+        std::fs::write(src.join("Cookies"), b"keep").unwrap();
+        std::fs::write(src.join("Current Session"), b"tabs").unwrap();
+        std::fs::write(src.join("LOCK"), b"lock").unwrap();
+        std::fs::write(src.join("seed.json"), b"meta").unwrap();
+        std::fs::create_dir_all(src.join("Sessions")).unwrap();
+        std::fs::write(src.join("Sessions/tab"), b"tab").unwrap();
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert_eq!(std::fs::read(dst.join("Cookies")).unwrap(), b"keep");
+        assert!(!dst.join("Current Session").exists());
+        assert!(!dst.join("LOCK").exists());
+        assert!(!dst.join("seed.json").exists());
+        assert!(!dst.join("Sessions").exists());
+    }
+
+    #[test]
+    fn test_strip_session_restore_removes_lock_and_tabs() {
+        let dir = TempDir::new("strip-session");
+        let profile = dir.join("Profile 49");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(dir.join("SingletonLock"), b"lock").unwrap();
+        std::fs::write(dir.join("DevToolsActivePort"), b"9222").unwrap();
+        std::fs::write(profile.join("Current Session"), b"tabs").unwrap();
+        std::fs::write(profile.join("Cookies"), b"keep").unwrap();
+        std::fs::create_dir_all(profile.join("Sessions")).unwrap();
+
+        strip_session_restore(&dir, "Profile 49");
+
+        assert!(!dir.join("SingletonLock").exists());
+        assert!(!dir.join("DevToolsActivePort").exists());
+        assert!(!profile.join("Current Session").exists());
+        assert!(!profile.join("Sessions").exists());
+        assert_eq!(std::fs::read(profile.join("Cookies")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn test_skip_copied_profile_entry() {
+        assert!(skip_copied_profile_entry("seed.json"));
+        assert!(skip_copied_profile_entry("LOCK"));
+        assert!(skip_copied_profile_entry("Current Session"));
+        assert!(skip_copied_profile_entry("Sessions"));
+        assert!(!skip_copied_profile_entry("Cookies"));
+        assert!(!skip_copied_profile_entry("Session Storage"));
     }
 
     /// Helper to create a fake Chrome profile directory with some files.

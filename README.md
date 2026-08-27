@@ -40,6 +40,21 @@ cargo install agent-browser
 agent-browser install  # Download Chrome from Chrome for Testing (first time only)
 ```
 
+### Frozen login seeds (isolated parallel sessions)
+
+Log in once in desktop Chrome, snapshot that profile, then launch any number of isolated sessions that start with those cookies and discard changes on close:
+
+```bash
+agent-browser profiles
+agent-browser seed save work --profile Default
+agent-browser --seed work --session job1 open https://mail.google.com
+agent-browser --seed work --session job2 open https://claude.ai
+agent-browser close --all
+# Next run clones the same seed again — no leftover cookies from job1/job2
+```
+
+On macOS, seed/profile copies launch real Google Chrome (not Chrome for Testing) so Keychain-encrypted cookies decrypt.
+
 ### From Source
 
 Requires Node.js 24+, pnpm 11+, and Rust.

@@ -11,6 +11,7 @@ mod native;
 mod output;
 mod plugins;
 mod read;
+mod seed;
 mod skills;
 #[cfg(test)]
 mod test_utils;
@@ -1143,6 +1144,11 @@ fn main() {
         return;
     }
 
+    if clean.first().map(|s| s.as_str()) == Some("seed") {
+        seed::run_seed(&clean, flags.json, flags.profile.as_deref());
+        return;
+    }
+
     // Handle skills command (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("skills") {
         skills::run_skills(&clean, flags.json);
@@ -1363,6 +1369,7 @@ fn main() {
         hide_scrollbars: flags.hide_scrollbars,
         webgpu: flags.webgpu,
         profile: flags.profile.as_deref(),
+        seed: flags.seed.as_deref(),
         state: flags.state.as_deref(),
         provider: flags.provider.as_deref(),
         device: flags.device.as_deref(),

@@ -9,6 +9,7 @@ Multiple isolated browser sessions with state persistence and concurrent browsin
 - [Named Sessions](#named-sessions)
 - [Session Isolation Properties](#session-isolation-properties)
 - [Tab Pinning in a Shared Browser](#tab-pinning-in-a-shared-browser)
+- [Frozen login seeds](#frozen-login-seeds)
 - [Session State Persistence](#session-state-persistence)
 - [Common Patterns](#common-patterns)
 - [Default Session](#default-session)
@@ -69,6 +70,22 @@ The flag is sticky per session: pass it once at session creation and later comma
 The structured `lastUrl` is limited to sanitized HTTP(S) URLs and `about:blank`. Credentials, query strings, and fragments are removed from HTTP(S) URLs. Opaque URLs such as `data:` are omitted. In batch JSON, the recovery object appears under `result` instead of `data`.
 
 When re-running a shared-tab script such as the repro from #1530, add `--pin-tab` to the first command for every session. Without it, `open` intentionally preserves the legacy behavior and navigates the shared active tab, so the original script still collides. The same rule applies when sessions attach with `--auto-connect` instead of `--cdp`.
+
+## Frozen login seeds
+
+`--profile` clones a desktop Chrome profile into a temp user-data-dir. Two processes cannot share one profile directory, so parallel `--profile` launches fail or fight over locks.
+
+`agent-browser seed save <name> --profile <chrome-profile>` freezes that login under `~/.agent-browser/seeds/<name>/`. Each `--seed <name>` launch clones the snapshot again: sessions start logged in, stay isolated, and discard changes on close.
+
+```bash
+agent-browser seed save mylogin --profile Default
+agent-browser --seed mylogin --session a open https://mail.google.com
+agent-browser --seed mylogin --session b open https://drive.google.com
+```
+
+`--seed` and `--profile` together is an error unless one side is only env/config: explicit `--profile` overrides `AGENT_BROWSER_SEED`, explicit `--seed` overrides `AGENT_BROWSER_PROFILE`. Pass `--no-seed` to ignore an env seed.
+
+MCP clients should read initialize instructions or `agent_browser_tools_profiles` defaults for the configured seed. If `seed=` is set, omit `--profile`.
 
 ## Session State Persistence
 

@@ -284,6 +284,7 @@ fn launch_hash(
     opts.headless.hash(&mut h);
     opts.extensions.hash(&mut h);
     opts.profile.hash(&mut h);
+    opts.seed.hash(&mut h);
     opts.executable_path.hash(&mut h);
     opts.args.hash(&mut h);
     opts.proxy.hash(&mut h);
@@ -3779,6 +3780,10 @@ fn launch_options_from_env() -> LaunchOptions {
             .collect()
     });
 
+    let mut seed = env::var("AGENT_BROWSER_SEED").ok();
+    let mut profile = env::var("AGENT_BROWSER_PROFILE").ok();
+    let _ = crate::seed::resolve_seed_and_profile(&mut seed, &mut profile, false, false);
+
     LaunchOptions {
         headless: !headed,
         executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH").ok(),
@@ -3786,7 +3791,8 @@ fn launch_options_from_env() -> LaunchOptions {
         proxy_bypass: env::var("AGENT_BROWSER_PROXY_BYPASS").ok(),
         proxy_username: env::var("AGENT_BROWSER_PROXY_USERNAME").ok(),
         proxy_password: env::var("AGENT_BROWSER_PROXY_PASSWORD").ok(),
-        profile: env::var("AGENT_BROWSER_PROFILE").ok(),
+        profile,
+        seed,
         allow_file_access: env::var("AGENT_BROWSER_ALLOW_FILE_ACCESS")
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false),
@@ -4179,10 +4185,24 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         .and_then(|v| v.as_str())
         .map(String::from)
         .or_else(|| env::var("AGENT_BROWSER_ENGINE").ok());
-    let profile = cmd
+    let profile_explicit = cmd.get("profile").and_then(|v| v.as_str()).is_some();
+    let seed_explicit = cmd.get("seed").and_then(|v| v.as_str()).is_some();
+    let mut profile = cmd
         .get("profile")
         .and_then(|v| v.as_str())
-        .map(String::from);
+        .map(String::from)
+        .or_else(|| env::var("AGENT_BROWSER_PROFILE").ok());
+    let mut seed = cmd
+        .get("seed")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| env::var("AGENT_BROWSER_SEED").ok());
+    crate::seed::resolve_seed_and_profile(
+        &mut seed,
+        &mut profile,
+        seed_explicit,
+        profile_explicit,
+    )?;
 
     let requested_allowed_domains = allowed_domains_from_launch_command(cmd);
     let previous_domain_filter = state.domain_filter.read().await.clone();
@@ -4250,6 +4270,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             .map(String::from)
             .or_else(|| env::var("AGENT_BROWSER_PROXY_PASSWORD").ok()),
         profile,
+        seed,
         allow_file_access: cmd
             .get("allowFileAccess")
             .and_then(|v| v.as_bool())
@@ -6073,6 +6094,13 @@ async fn handle_session_info(state: &DaemonState) -> Result<Value, String> {
             "browserLaunched": state.browser.is_some(),
             "engine": state.engine,
             "launchHash": state.launch_hash,
+            "auth": if env::var("AGENT_BROWSER_SEED").ok().filter(|s| !s.is_empty()).is_some() {
+                "seed"
+            } else if env::var("AGENT_BROWSER_PROFILE").ok().filter(|s| !s.is_empty()).is_some() {
+                "profile"
+            } else {
+                "none"
+            },
         },
         "restoreKey": state.session_name,
         "restoreStatus": state.restore_status,
@@ -6085,6 +6113,8 @@ async fn handle_session_info(state: &DaemonState) -> Result<Value, String> {
         "restoreCheckUrl": state.restore_check_url,
         "restoreCheckText": state.restore_check_text,
         "restoreCheckFn": state.restore_check_fn,
+        "seed": env::var("AGENT_BROWSER_SEED").ok(),
+        "profile": env::var("AGENT_BROWSER_PROFILE").ok(),
     }))
 }
 

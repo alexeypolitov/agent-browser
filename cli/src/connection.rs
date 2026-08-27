@@ -448,6 +448,7 @@ pub struct DaemonOptions<'a> {
     pub hide_scrollbars: bool,
     pub webgpu: bool,
     pub profile: Option<&'a str>,
+    pub seed: Option<&'a str>,
     pub state: Option<&'a str>,
     pub provider: Option<&'a str>,
     pub device: Option<&'a str>,
@@ -525,6 +526,9 @@ fn apply_daemon_env(cmd: &mut Command, session: &str, opts: &DaemonOptions) {
     }
     if let Some(prof) = opts.profile {
         cmd.env("AGENT_BROWSER_PROFILE", prof);
+    }
+    if let Some(seed) = opts.seed {
+        cmd.env("AGENT_BROWSER_SEED", seed);
     }
     if let Some(st) = opts.state {
         cmd.env("AGENT_BROWSER_STATE", st);
@@ -1260,6 +1264,7 @@ mod tests {
             hide_scrollbars: true,
             webgpu: false,
             profile: None,
+            seed: None,
             state: None,
             provider: None,
             device: None,

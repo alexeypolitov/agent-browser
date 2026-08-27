@@ -3263,6 +3263,32 @@ Examples:
 "##
         }
 
+        "seed" => {
+            r##"
+agent-browser seed - Frozen login snapshots for isolated parallel sessions
+
+Usage:
+  agent-browser seed save <name> --profile <chrome-profile>
+  agent-browser seed list
+  agent-browser seed show <name>
+  agent-browser seed delete <name>
+
+Saves cookies/login state from a desktop Chrome profile into
+~/.agent-browser/seeds/<name>/. Each --seed launch clones that snapshot
+into a temp user-data-dir: parallel sessions start logged in, stay isolated,
+and discard changes on close. The seed is never written back.
+
+Launch:
+  agent-browser --seed <name> open https://example.com
+  AGENT_BROWSER_SEED=<name> agent-browser --session a open https://example.com
+
+Examples:
+  agent-browser seed save work --profile Default
+  agent-browser --seed work --session job1 open https://mail.google.com
+  agent-browser --seed work --session job2 open https://claude.ai
+"##
+        }
+
         "profiles" => {
             r##"
 agent-browser profiles - List available Chrome profiles
@@ -3678,6 +3704,7 @@ Setup:
   doctor [--fix]             Diagnose install; auto-clean stale files
   dashboard start            Start the observability dashboard
   profiles                   List available Chrome profiles
+  seed save|list|show|delete Frozen login snapshot for isolated sessions
 
 Snapshot Options:
   -i, --interactive          Only interactive elements
@@ -3689,6 +3716,11 @@ Authentication:
   --profile <name|path>      Chrome profile name (e.g., Default) to reuse login state,
                              or a directory path for a persistent custom profile
                              (or AGENT_BROWSER_PROFILE env)
+  --seed <name>              Clone a frozen seed (agent-browser seed save) into an
+                             isolated temp profile for this session
+                             (or AGENT_BROWSER_SEED env)
+  --no-seed                  Clear AGENT_BROWSER_SEED for this command so --profile
+                             or a blank profile can be used
   --restore [name]           Auto-save/restore cookies and localStorage.
                              Without a name, uses --session as the restore key
                              (or AGENT_BROWSER_RESTORE env)
@@ -3799,6 +3831,8 @@ Environment:
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
+  AGENT_BROWSER_PROFILE          Chrome profile name or persistent directory
+  AGENT_BROWSER_SEED             Frozen login seed name (see `seed save`)
   AGENT_BROWSER_EXTENSIONS       Comma-separated browser extension paths
   AGENT_BROWSER_INIT_SCRIPTS     Comma-separated paths to page init scripts
   AGENT_BROWSER_ENABLE           Comma-separated built-in init script features (e.g. react-devtools)

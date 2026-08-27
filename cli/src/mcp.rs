@@ -677,8 +677,9 @@ fn initialize_result(params: Option<&Value>, config: &McpConfig) -> Value {
             "version": env!("CARGO_PKG_VERSION")
         },
         "instructions": format!(
-            "Use the typed agent_browser_* tools to control a browser. Active MCP tools profile(s): {}. Prefer agent_browser_snapshot after navigation to obtain stable element refs before clicking or typing. Use agent_browser_tools_profiles to see available startup profiles.",
-            config.profile_names().join(", ")
+            "Use the typed agent_browser_* tools to control a browser. Active MCP tools profile(s): {}. Prefer agent_browser_snapshot after navigation to obtain stable element refs before clicking or typing. Use agent_browser_tools_profiles to see available startup profiles. {}",
+            config.profile_names().join(", "),
+            crate::seed::mcp_defaults_instructions()
         )
     })
 }
@@ -743,7 +744,7 @@ fn tools() -> Vec<Value> {
         tool(
             TOOL_TOOLS_PROFILES,
             "MCP tool profiles",
-            "List MCP startup tool profiles and how to enable them.",
+             "List MCP startup tool profiles and env/config launch defaults (seed, profile, session, namespace).",
             json!({}),
             &[],
         ),
@@ -1665,7 +1666,7 @@ fn parity_tools() -> Vec<Value> {
         tool(
             TOOL_SESSION_INFO,
             "Session info",
-            "Show session, daemon, launch, and restore diagnostics.",
+            "Show session, daemon, launch, restore, and seed/profile diagnostics.",
             json!({}),
             &[],
         ),
@@ -1919,6 +1920,27 @@ fn tool(name: &str, title: &str, description: &str, properties: Value, required:
         json!({
             "type": "string",
             "description": "Daemon idle timeout such as 30s, 5m, 1h, or raw milliseconds. Defaults to 1h; 0 disables idle shutdown."
+        }),
+    );
+    props.insert(
+        "seed".to_string(),
+        json!({
+            "type": "string",
+            "description": "Frozen login seed name (agent-browser seed save). Explicit value overrides AGENT_BROWSER_SEED. Omit to keep the env/config default. Do not combine with profile."
+        }),
+    );
+    props.insert(
+        "profile".to_string(),
+        json!({
+            "type": "string",
+            "description": "Chrome profile name or path. Explicit value overrides AGENT_BROWSER_SEED. Omit to keep env/config defaults. Prefer seed for parallel logged-in sessions."
+        }),
+    );
+    props.insert(
+        "noSeed".to_string(),
+        json!({
+            "type": "boolean",
+            "description": "Clear AGENT_BROWSER_SEED for this command (--no-seed). Use when you want a blank profile or an explicit profile instead of the MCP default seed."
         }),
     );
     props.insert(
@@ -2267,9 +2289,12 @@ fn call_tool(params: Option<&Value>, config: &McpConfig) -> Result<Value, Protoc
 
 fn call_tools_profiles(config: &McpConfig) -> Result<Value, ProtocolError> {
     let profiles = tool_profile_summaries();
+    let defaults = crate::seed::mcp_defaults();
+    let defaults_line = crate::seed::mcp_defaults_instructions();
     let text = format!(
-        "Active MCP tools profile(s): {}\n\nAvailable profiles:\n{}\n\nRestart the MCP server with `agent-browser mcp --tools <profile>` or combine profiles with commas, for example `agent-browser mcp --tools core,network,react`. Use `agent-browser mcp --tools all` for the full typed CLI parity surface.",
+        "Active MCP tools profile(s): {}\n\n{}\n\nAvailable profiles:\n{}\n\nRestart the MCP server with `agent-browser mcp --tools <profile>` or combine profiles with commas, for example `agent-browser mcp --tools core,network,react`. Use `agent-browser mcp --tools all` for the full typed CLI parity surface.",
         config.profile_names().join(", "),
+        defaults_line,
         profiles
             .iter()
             .filter_map(|profile| {
@@ -2292,6 +2317,7 @@ fn call_tools_profiles(config: &McpConfig) -> Result<Value, ProtocolError> {
         "structuredContent": {
             "activeProfiles": config.profile_names(),
             "profiles": profiles,
+            "defaults": defaults,
             "usage": {
                 "default": "agent-browser mcp",
                 "compose": "agent-browser mcp --tools core,network,react",
@@ -3559,6 +3585,29 @@ fn append_common_global_args(
         args.push(idle_timeout);
     }
 
+    let seed = optional_string(arguments, "seed")?;
+    let profile = optional_string(arguments, "profile")?;
+    let no_seed = optional_bool(arguments, "noSeed")?.unwrap_or(false);
+    if no_seed && seed.is_some() {
+        return Err(ProtocolError::invalid_params("Cannot use seed with noSeed"));
+    }
+    if seed.is_some() && profile.is_some() {
+        return Err(ProtocolError::invalid_params(
+            "Cannot use seed with profile. Omit profile to clone the seed, or pass noSeed to use profile.",
+        ));
+    }
+    if no_seed {
+        args.push("--no-seed".to_string());
+    }
+    if let Some(seed) = seed {
+        args.push("--seed".to_string());
+        args.push(seed);
+    }
+    if let Some(profile) = profile {
+        args.push("--profile".to_string());
+        args.push(profile);
+    }
+
     if let Some(restore) = arguments.get("restore") {
         if let Some(enabled) = restore.as_bool() {
             if enabled {
@@ -4076,6 +4125,11 @@ mod tests {
             .unwrap()
             .contains("accessibility audits"));
         assert!(McpConfig::from_profiles(vec![ToolProfile::Debug]).allows(TOOL_A11Y));
+        assert!(result["structuredContent"].get("defaults").is_some());
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Defaults:"));
     }
 
     #[test]
@@ -4432,5 +4486,62 @@ mod tests {
     fn initialize_defaults_to_latest_protocol_version() {
         let result = initialize_result(None, &McpConfig::default());
         assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
+        let instructions = result["instructions"].as_str().unwrap();
+        assert!(instructions.contains("Defaults:"), "{instructions}");
+        assert!(instructions.contains("session="), "{instructions}");
+    }
+
+    #[test]
+    fn common_global_args_include_seed_and_profile() {
+        let mut args = Vec::new();
+        append_common_global_args(
+            &mut args,
+            &json!({
+                "seed": "work",
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(args, vec!["--seed", "work"]);
+
+        let mut args = Vec::new();
+        append_common_global_args(
+            &mut args,
+            &json!({
+                "profile": "Default",
+                "noSeed": true,
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(args, vec!["--no-seed", "--profile", "Default"]);
+    }
+
+    #[test]
+    fn common_global_args_reject_seed_with_profile() {
+        let mut args = Vec::new();
+        let error = append_common_global_args(
+            &mut args,
+            &json!({
+                "seed": "work",
+                "profile": "Default"
+            }),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("Cannot use seed with profile"));
+    }
+
+    #[test]
+    fn tool_schema_includes_seed_profile_no_seed() {
+        let tools = tools();
+        let open = tools
+            .iter()
+            .find(|t| t["name"].as_str() == Some(TOOL_OPEN))
+            .unwrap();
+        let props = &open["inputSchema"]["properties"];
+        assert_eq!(props["seed"]["type"], "string");
+        assert_eq!(props["profile"]["type"], "string");
+        assert_eq!(props["noSeed"]["type"], "boolean");
     }
 }

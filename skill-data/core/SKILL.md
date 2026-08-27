@@ -70,6 +70,8 @@ agent-browser mcp --tools core,network,react
 
 Configure the MCP client to launch `agent-browser` with `["mcp"]`. The server defaults to MCP protocol 2025-11-25 and accepts older supported client protocol versions during initialization. The default tools profile is `core`, which keeps MCP context small for everyday browser automation. Use `--tools all` for the full typed CLI parity surface, or combine profiles with commas, such as `--tools core,network,react`. Profiles are `core`, `network`, `state`, `debug`, `tabs`, `react`, `mobile`, and `all`; the `debug` profile includes accessibility audits, plugin registry, and command.run tools. Each tool accepts typed arguments plus `extraArgs` for advanced CLI flags and exact CLI parity. The common `allowedDomains` array maps to `--allowed-domains` and activates the same WebRTC containment and launch-mode restrictions, while `idleTimeout` maps to `--idle-timeout`. Tool discovery is paginated and includes read-only/open-world annotations so modern MCP clients can load the large typed surface incrementally. Use the tool `session` argument or `AGENT_BROWSER_SESSION` to isolate browser sessions.
 
+MCP env/config (seed, profile, session, namespace) is **not** in tool schemas. Read it from initialize `instructions` or `agent_browser_tools_profiles` → `defaults`. If `seed=` is set, do **not** pass `--profile` / `extraArgs --profile`; each named `session` clones that seed. Use tool `profile` or `noSeed` only when you intend to override.
+
 ## eve agent integration
 
 For eve agents, mount the `@agent-browser/eve` extension instead of hand-writing browser tools. It adds namespaced tools such as `browser__navigate`, `browser__snapshot`, `browser__click`, `browser__fill`, `browser__find`, and `browser__screenshot`, all backed by agent-browser running inside the eve sandbox. The sandbox bootstrap helpers (`installAgentBrowser`, `agentBrowserRevalidationKey`) ship with the same package under `@agent-browser/eve/sandbox`, so `agent/sandbox.ts` needs no extra dependency.
@@ -314,6 +316,16 @@ agent-browser --session b open https://app.example.com
 agent-browser --session a fill @e1 "alice@test.com"
 agent-browser --session b fill @e1 "bob@test.com"
 ```
+
+`--profile` copies a live Chrome profile and cannot be shared by two browsers. For parallel **logged-in** sessions, snapshot once and clone with `--seed`:
+
+```bash
+agent-browser seed save mylogin --profile Default
+agent-browser --seed mylogin --session job1 open https://mail.google.com
+agent-browser --seed mylogin --session job2 open https://drive.google.com
+```
+
+MCP `AGENT_BROWSER_SEED` (shown in initialize instructions) applies the same clone to every session automatically. Do not also pass `--profile`.
 
 `AGENT_BROWSER_SESSION=myapp` sets the default session for the current shell.
 

@@ -70,6 +70,7 @@ pub struct Config {
     pub init_scripts: Option<Vec<String>>,
     pub enable: Option<Vec<String>>,
     pub profile: Option<String>,
+    pub seed: Option<String>,
     pub state: Option<String>,
     pub proxy: Option<String>,
     pub proxy_bypass: Option<String>,
@@ -152,6 +153,7 @@ impl Config {
                 (a, b) => b.or(a),
             },
             profile: other.profile.or(self.profile),
+            seed: other.seed.or(self.seed),
             state: other.state.or(self.state),
             proxy: other.proxy.or(self.proxy),
             proxy_bypass: other.proxy_bypass.or(self.proxy_bypass),
@@ -290,6 +292,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--init-script",
         "--enable",
         "--profile",
+        "--seed",
         "--state",
         "--proxy",
         "--proxy-bypass",
@@ -377,6 +380,7 @@ pub struct Flags {
     pub init_scripts: Vec<String>,
     pub enable: Vec<String>,
     pub profile: Option<String>,
+    pub seed: Option<String>,
     pub state: Option<String>,
     pub proxy: Option<String>,
     pub proxy_bypass: Option<String>,
@@ -424,6 +428,8 @@ pub struct Flags {
     pub cli_init_scripts: bool,
     pub cli_enable: bool,
     pub cli_profile: bool,
+    pub cli_seed: bool,
+    pub cli_no_seed: bool,
     pub cli_state: bool,
     pub cli_args: bool,
     pub cli_user_agent: bool,
@@ -555,6 +561,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         init_scripts,
         enable,
         profile: env::var("AGENT_BROWSER_PROFILE").ok().or(config.profile),
+        seed: env::var("AGENT_BROWSER_SEED").ok().or(config.seed),
         state: env::var("AGENT_BROWSER_STATE").ok().or(config.state),
         proxy: env::var("AGENT_BROWSER_PROXY")
             .ok()
@@ -654,6 +661,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_init_scripts: false,
         cli_enable: false,
         cli_profile: false,
+        cli_seed: false,
+        cli_no_seed: false,
         cli_state: false,
         cli_args: false,
         cli_user_agent: false,
@@ -835,6 +844,25 @@ pub fn parse_flags(args: &[String]) -> Flags {
                 if let Some(s) = args.get(i + 1) {
                     flags.profile = Some(s.clone());
                     flags.cli_profile = true;
+                    i += 1;
+                }
+            }
+            "--seed" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.seed = Some(s.clone());
+                    flags.cli_seed = true;
+                    flags.cli_no_seed = false;
+                    i += 1;
+                }
+            }
+            "--no-seed" => {
+                let (val, consumed) = parse_bool_arg(args, i);
+                flags.cli_no_seed = val;
+                if val {
+                    flags.seed = None;
+                    flags.cli_seed = false;
+                }
+                if consumed {
                     i += 1;
                 }
             }
@@ -1091,6 +1119,17 @@ pub fn parse_flags(args: &[String]) -> Flags {
         }
         i += 1;
     }
+    if flags.cli_no_seed {
+        flags.seed = None;
+        flags.cli_seed = false;
+    }
+    let seed_explicit = flags.cli_seed && !flags.cli_no_seed;
+    let _ = crate::seed::resolve_seed_and_profile(
+        &mut flags.seed,
+        &mut flags.profile,
+        seed_explicit,
+        flags.cli_profile,
+    );
     flags
 }
 
@@ -1115,6 +1154,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--pin-tab",
         "--no-pin-tab",
         "--no-ca-cert",
+        "--no-seed",
         "--annotate",
         "--content-boundaries",
         "--confirm-interactive",
@@ -1143,6 +1183,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--init-script",
         "--enable",
         "--profile",
+        "--seed",
         "--state",
         "--proxy",
         "--proxy-bypass",
@@ -1481,6 +1522,45 @@ mod tests {
     fn test_cli_profile_tracking() {
         let flags = parse_flags(&args("--profile /path/to/profile snapshot"));
         assert!(flags.cli_profile);
+    }
+
+    #[test]
+    fn test_cli_seed_tracking() {
+        let flags = parse_flags(&args("--seed work snapshot"));
+        assert!(flags.cli_seed);
+        assert_eq!(flags.seed.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn test_cli_profile_overrides_env_seed() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SEED", "AGENT_BROWSER_PROFILE"]);
+        guard.set("AGENT_BROWSER_SEED", "work");
+        guard.remove("AGENT_BROWSER_PROFILE");
+        let flags = parse_flags(&args("--profile Default snapshot"));
+        assert!(flags.cli_profile);
+        assert_eq!(flags.profile.as_deref(), Some("Default"));
+        assert!(flags.seed.is_none());
+    }
+
+    #[test]
+    fn test_cli_seed_overrides_env_profile() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SEED", "AGENT_BROWSER_PROFILE"]);
+        guard.remove("AGENT_BROWSER_SEED");
+        guard.set("AGENT_BROWSER_PROFILE", "Default");
+        let flags = parse_flags(&args("--seed work snapshot"));
+        assert_eq!(flags.seed.as_deref(), Some("work"));
+        assert!(flags.profile.is_none());
+    }
+
+    #[test]
+    fn test_no_seed_clears_env_seed() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SEED", "AGENT_BROWSER_PROFILE"]);
+        guard.set("AGENT_BROWSER_SEED", "work");
+        guard.remove("AGENT_BROWSER_PROFILE");
+        let flags = parse_flags(&args("--no-seed snapshot"));
+        assert!(flags.cli_no_seed);
+        assert!(flags.seed.is_none());
+        assert!(!flags.cli_seed);
     }
 
     #[test]
