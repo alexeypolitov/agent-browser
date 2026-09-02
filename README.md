@@ -57,7 +57,7 @@ On macOS, seed/profile copies launch real Google Chrome (not Chrome for Testing)
 
 ### From Source
 
-Requires Node.js 24+, pnpm 11+, and Rust.
+Requires Node.js 24+, pnpm 11+, and Rust ([rustup.rs](https://rustup.rs)). On macOS, also put the linked binary on `PATH` (pnpm global bin, often `~/Library/pnpm`).
 
 ```bash
 git clone https://github.com/vercel-labs/agent-browser
@@ -67,7 +67,35 @@ pnpm build
 pnpm build:native   # Requires Rust (https://rustup.rs)
 pnpm link --global  # Makes agent-browser available globally
 agent-browser install
+agent-browser doctor
 ```
+
+Clone this repository instead of `vercel-labs/agent-browser` when you are building the local tree.
+
+### OpenCode (macOS)
+
+`install` does not write MCP config. Paste this into the **project** `opencode.json`. Use the command name on `PATH`, not a machine-specific absolute path.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agent-browser-example": {
+      "type": "local",
+      "command": ["agent-browser", "mcp", "--tools", "core,state"],
+      "enabled": true,
+      "timeout": 120000,
+      "environment": {
+        "AGENT_BROWSER_SESSION": "example",
+        "AGENT_BROWSER_NAMESPACE": "example",
+        "AGENT_BROWSER_SEED": "example"
+      }
+    }
+  }
+}
+```
+
+Restart OpenCode. Verify with `agent-browser doctor` and `agent-browser skills get core`.
 
 ### Linux Dependencies
 
