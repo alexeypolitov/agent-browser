@@ -1919,7 +1919,7 @@ fn tool(name: &str, title: &str, description: &str, properties: Value, required:
         "idleTimeout".to_string(),
         json!({
             "type": "string",
-            "description": "Daemon idle timeout such as 30s, 5m, 1h, or raw milliseconds. Defaults to 1h; 0 disables idle shutdown."
+            "description": "Daemon idle timeout such as 30s, 5m, 1h, or raw milliseconds. Defaults to 1h; 0 disables idle shutdown. Omit on follow-up calls in the same session so a headed window is not restarted. Pass the same value on every call only when you intend to change it."
         }),
     );
     props.insert(
@@ -4302,6 +4302,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(args, vec!["--idle-timeout", "0"]);
+    }
+
+    #[test]
+    fn common_global_args_omit_idle_timeout_when_unset() {
+        let mut args = Vec::new();
+
+        append_common_global_args(&mut args, &json!({}), None).unwrap();
+
+        assert!(
+            !args.iter().any(|arg| arg == "--idle-timeout"),
+            "omitting idleTimeout must not send --idle-timeout; a later snapshot must inherit the running daemon"
+        );
     }
 
     #[test]

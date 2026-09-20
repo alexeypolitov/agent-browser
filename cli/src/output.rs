@@ -3785,7 +3785,8 @@ Options:
   --confirm-interactive      Interactive confirmation prompts; auto-denies if stdin is not a TTY (or AGENT_BROWSER_CONFIRM_INTERACTIVE)
   --engine <name>            Browser engine: chrome (default), lightpanda (or AGENT_BROWSER_ENGINE)
   --idle-timeout <time>      Shut down daemon after inactivity: 10s, 3m, 1h, or raw ms
-                             (default: 1h; 0 disables; dashboard input resets the timer)
+                             (default: 1h; 0 disables; dashboard input resets the timer;
+                             omit on later commands in the same session to keep the running daemon)
   --no-auto-dialog           Disable automatic dismissal of alert/beforeunload dialogs (or AGENT_BROWSER_NO_AUTO_DIALOG)
   --model <name>             AI model for chat (or AI_GATEWAY_MODEL env)
   -v, --verbose              Show tool commands and their raw output
@@ -3863,6 +3864,7 @@ Environment:
   AGENT_BROWSER_IDLE_TIMEOUT_MS  Auto-shutdown daemon after N ms of inactivity (default: 3600000 = 1h; 0 disables)
                                  Dashboard input resets the timer; headed, Safari/iOS WebDriver, and user-attached browsers are exempt from the default
                                  Provider-owned cloud browsers remain eligible for default cleanup
+                                 Omitting the timeout on a later command keeps the running daemon
   AGENT_BROWSER_IOS_DEVICE       Default iOS device name
   AGENT_BROWSER_IOS_UDID         Default iOS device UDID
   AGENT_BROWSER_CONTENT_BOUNDARIES Wrap page output in boundary markers

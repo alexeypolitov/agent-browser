@@ -592,6 +592,53 @@ fn apply_daemon_env(cmd: &mut Command, session: &str, opts: &DaemonOptions) {
     }
 }
 
+/// Daemon-owned identity persisted so later CLI/MCP calls can omit optional
+/// fields (especially idle timeout) without restarting Chrome.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DaemonPersistedConfig {
+    debug: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirm_actions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    idle_timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_timeout: Option<u64>,
+    no_auto_dialog: bool,
+}
+
+impl DaemonPersistedConfig {
+    fn from_opts(opts: &DaemonOptions) -> Self {
+        Self {
+            debug: opts.debug,
+            action_policy: opts.action_policy.map(str::to_string),
+            confirm_actions: opts.confirm_actions.map(str::to_string),
+            idle_timeout: opts.idle_timeout.map(str::to_string),
+            default_timeout: opts.default_timeout,
+            no_auto_dialog: opts.no_auto_dialog,
+        }
+    }
+
+    fn compatible(&self, opts: &DaemonOptions) -> bool {
+        self.debug == opts.debug
+            && self.no_auto_dialog == opts.no_auto_dialog
+            && option_compatible(opts.action_policy, self.action_policy.as_deref())
+            && option_compatible(opts.confirm_actions, self.confirm_actions.as_deref())
+            && option_compatible(opts.idle_timeout, self.idle_timeout.as_deref())
+            && option_compatible(opts.default_timeout.as_ref(), self.default_timeout.as_ref())
+    }
+}
+
+/// Incoming `None` means "inherit the running daemon". An explicit value must
+/// match what the daemon was started with.
+fn option_compatible<T: PartialEq + ?Sized>(incoming: Option<&T>, stored: Option<&T>) -> bool {
+    match incoming {
+        None => true,
+        Some(value) => stored == Some(value),
+    }
+}
+
 fn daemon_config_fingerprint(opts: &DaemonOptions) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     opts.debug.hash(&mut hasher);
@@ -603,6 +650,10 @@ fn daemon_config_fingerprint(opts: &DaemonOptions) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+fn is_legacy_config_fingerprint(raw: &str) -> bool {
+    raw.len() == 16 && raw.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaemonConfigStatus {
     Matches,
@@ -611,10 +662,23 @@ enum DaemonConfigStatus {
 }
 
 fn daemon_config_status(session: &str, opts: &DaemonOptions) -> DaemonConfigStatus {
-    let expected = daemon_config_fingerprint(opts);
     match fs::read_to_string(get_config_path(session)) {
-        Ok(actual) if actual.trim() == expected => DaemonConfigStatus::Matches,
-        Ok(_) => DaemonConfigStatus::Different,
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if let Ok(stored) = serde_json::from_str::<DaemonPersistedConfig>(trimmed) {
+                if stored.compatible(opts) {
+                    DaemonConfigStatus::Matches
+                } else {
+                    DaemonConfigStatus::Different
+                }
+            } else if is_legacy_config_fingerprint(trimmed)
+                && trimmed == daemon_config_fingerprint(opts)
+            {
+                DaemonConfigStatus::Matches
+            } else {
+                DaemonConfigStatus::Different
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DaemonConfigStatus::Missing,
         Err(_) => DaemonConfigStatus::Different,
     }
@@ -625,7 +689,9 @@ fn daemon_config_matches(session: &str, opts: &DaemonOptions) -> bool {
 }
 
 fn write_daemon_config(session: &str, opts: &DaemonOptions) {
-    let _ = fs::write(get_config_path(session), daemon_config_fingerprint(opts));
+    if let Ok(body) = serde_json::to_string(&DaemonPersistedConfig::from_opts(opts)) {
+        let _ = fs::write(get_config_path(session), body);
+    }
 }
 
 fn daemon_pid_matches(session: &str, expected_pid: u32) -> bool {
@@ -1309,6 +1375,119 @@ mod tests {
             daemon_config_fingerprint(&domains_changed),
             "allowed domains are browser launch state, not daemon identity"
         );
+    }
+
+    #[test]
+    fn test_omitted_idle_timeout_reuses_explicit_daemon_config() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_NAMESPACE"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        guard.remove("AGENT_BROWSER_NAMESPACE");
+
+        let session = "idle-inherit";
+        let started = test_daemon_options(Some("3600000"), false, None);
+        let omitted = test_daemon_options(None, false, None);
+        fs::create_dir_all(get_socket_dir()).unwrap();
+        write_daemon_config(session, &started);
+
+        assert_eq!(
+            daemon_config_status(session, &omitted),
+            DaemonConfigStatus::Matches,
+            "MCP/CLI calls that omit idleTimeout must reuse a daemon started with an explicit timeout instead of killing Chrome"
+        );
+        assert!(daemon_config_matches(session, &started));
+        let stored = fs::read_to_string(get_config_path(session)).unwrap();
+        assert!(
+            stored.contains("3600000"),
+            "inherit must not rewrite stored timeout"
+        );
+    }
+
+    #[test]
+    fn test_explicit_idle_timeout_change_does_not_match() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_NAMESPACE"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        guard.remove("AGENT_BROWSER_NAMESPACE");
+
+        let session = "idle-change";
+        fs::create_dir_all(get_socket_dir()).unwrap();
+        write_daemon_config(session, &test_daemon_options(Some("3600000"), false, None));
+
+        assert_eq!(
+            daemon_config_status(session, &test_daemon_options(Some("30000"), false, None)),
+            DaemonConfigStatus::Different
+        );
+    }
+
+    #[test]
+    fn test_omitted_idle_timeout_does_not_overwrite_winner_config() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_NAMESPACE"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        guard.remove("AGENT_BROWSER_NAMESPACE");
+
+        let session = "idle-inherit-spawn";
+        let winner = test_daemon_options(Some("3600000"), false, None);
+        let omitted = test_daemon_options(None, false, None);
+        fs::create_dir_all(get_socket_dir()).unwrap();
+        fs::write(get_pid_path(session), "12345").unwrap();
+        write_daemon_config(session, &winner);
+
+        let result = ready_spawned_daemon_result(session, &omitted, Some(67890), false)
+            .expect("omitted idle timeout should reuse the running daemon");
+        assert!(result.already_running);
+        assert!(!result.restarted);
+        assert!(daemon_config_matches(session, &winner));
+        let stored = fs::read_to_string(get_config_path(session)).unwrap();
+        assert!(stored.contains("3600000"));
+    }
+
+    #[test]
+    fn test_omitted_default_timeout_reuses_explicit_daemon_config() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_NAMESPACE"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        guard.remove("AGENT_BROWSER_NAMESPACE");
+
+        let session = "default-timeout-inherit";
+        let mut started = test_daemon_options(None, false, None);
+        started.default_timeout = Some(120_000);
+        let omitted = test_daemon_options(None, false, None);
+        fs::create_dir_all(get_socket_dir()).unwrap();
+        write_daemon_config(session, &started);
+
+        assert_eq!(
+            daemon_config_status(session, &omitted),
+            DaemonConfigStatus::Matches
+        );
+        let mut changed = test_daemon_options(None, false, None);
+        changed.default_timeout = Some(5_000);
+        assert_eq!(
+            daemon_config_status(session, &changed),
+            DaemonConfigStatus::Different
+        );
+    }
+
+    #[test]
+    fn test_ready_existing_omitted_idle_timeout_matches() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_NAMESPACE"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        guard.remove("AGENT_BROWSER_NAMESPACE");
+
+        let session = "idle-ready-existing";
+        fs::create_dir_all(get_socket_dir()).unwrap();
+        write_daemon_config(session, &test_daemon_options(Some("3600000"), false, None));
+
+        let result = ready_existing_daemon_result(
+            session,
+            &test_daemon_options(None, false, None),
+            Duration::from_secs(1),
+        )
+        .expect("omitted idle timeout should reuse the running daemon");
+        assert!(result.already_running);
+        assert!(!result.restarted);
     }
 
     #[test]

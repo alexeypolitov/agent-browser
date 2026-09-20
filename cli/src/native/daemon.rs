@@ -171,7 +171,8 @@ pub async fn run_daemon(session: &str) {
 /// explicit timeout, the default never closes a headed browser (including
 /// Safari and iOS WebDriver sessions) or a user-attached browser because those
 /// may be in direct human use that the daemon cannot observe. Provider-owned
-/// CDP browsers remain eligible for cleanup.
+/// CDP browsers remain eligible for cleanup. A later CLI/MCP call that omits
+/// the timeout inherits this daemon instead of restarting it.
 pub const DEFAULT_IDLE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 
 #[derive(Clone, Copy)]
