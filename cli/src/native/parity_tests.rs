@@ -165,6 +165,7 @@ const DOCUMENTED_ACTIONS: &[&str] = &[
     "responsebody",
     "waitfordownload",
     "window_new",
+    "window_focus",
     "diff_screenshot",
     "video_start",
     "video_stop",

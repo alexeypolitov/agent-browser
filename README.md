@@ -373,6 +373,7 @@ agent-browser tab new --label docs [url]       # New tab with a user-assigned la
 agent-browser tab <t<N>|label>                 # Switch to a tab by id or label
 agent-browser tab close [t<N>|label]           # Close a tab (defaults to active)
 agent-browser window new                       # New window
+agent-browser window focus                     # Raise the headed window
 ```
 
 Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused within a session, so scripts and agents can keep referring to the same tab even after other tabs are opened or closed. Positional integers like `tab 2` are **not** accepted; the `t` prefix disambiguates handles from indices and mirrors the `@e1` convention used for element refs.
@@ -1048,6 +1049,8 @@ agent-browser open example.com
 # Stop the dashboard
 agent-browser dashboard stop
 ```
+
+A binary built from this repository before `pnpm build:dashboard` does not embed the UI. `dashboard start` fails instead of serving a placeholder page. Rebuild the CLI after building the dashboard. Published npm builds already include it.
 
 The dashboard runs as a standalone background process on port 4848, independent of browser sessions. It stays available even when no sessions are running, and it works from `http://localhost:4848` or a proxied/forwarded URL that reaches the dashboard server, such as `https://dashboard.agent-browser.localhost` or a Coder workspace URL. The browser stays on the dashboard origin; session-specific tabs, status, and stream traffic are proxied internally, so session ports do not need to be exposed.
 

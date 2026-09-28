@@ -766,6 +766,15 @@ fn get_dashboard_pid_path() -> std::path::PathBuf {
 }
 
 fn run_dashboard_start(port: u16, json_mode: bool) {
+    if let Some(msg) = native::stream::embedded_dashboard_placeholder_error() {
+        if json_mode {
+            print_json_error(msg.to_string());
+        } else {
+            eprintln!("{} {}", color::error_indicator(), msg);
+        }
+        exit(1);
+    }
+
     let pid_path = get_dashboard_pid_path();
 
     // Check if already running
@@ -1035,6 +1044,10 @@ fn main() {
 
     // Standalone dashboard server mode
     if env::var("AGENT_BROWSER_DASHBOARD").is_ok() {
+        if let Some(msg) = native::stream::embedded_dashboard_placeholder_error() {
+            eprintln!("{} {}", color::error_indicator(), msg);
+            exit(1);
+        }
         let port: u16 = env::var("AGENT_BROWSER_DASHBOARD_PORT")
             .ok()
             .and_then(|s| s.parse().ok())

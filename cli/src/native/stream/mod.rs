@@ -7,6 +7,7 @@ mod websocket;
 
 pub use cdp_loop::{ack_screencast_frame, start_screencast, stop_screencast};
 pub use dashboard::run_dashboard_server;
+pub use http::embedded_dashboard_placeholder_error;
 
 use serde_json::{json, Value};
 use std::sync::Arc;

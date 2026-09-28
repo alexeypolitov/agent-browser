@@ -529,6 +529,10 @@ pub struct DaemonState {
     pub pin_tab: bool,
     /// Last binding written to disk, so persistence is write-on-change.
     last_persisted_binding: Option<tab_binding::TabBinding>,
+    /// Set when an explicit `--headed` launch raises the window. Consumed by
+    /// the next non-launch response so `open --headed` can report it. The
+    /// launch response itself is not shown to the CLI caller.
+    announce_window_focused: bool,
 }
 
 fn default_idle_shutdown_is_blocked(
@@ -633,6 +637,7 @@ impl DaemonState {
             confirmed_policy_actions: HashSet::new(),
             pin_tab,
             last_persisted_binding: None,
+            announce_window_focused: false,
         }
     }
 
@@ -2258,7 +2263,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             Ok(data) => success_response(&id, data),
             Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
         };
-        inject_lifecycle(&mut resp, state, false, false, false);
+        inject_lifecycle(&mut resp, state, false, false, false, action);
         return resp;
     }
 
@@ -2668,6 +2673,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "responsebody" => handle_responsebody(cmd, state).await,
         "waitfordownload" => handle_waitfordownload(cmd, state).await,
         "window_new" => handle_window_new(cmd, state).await,
+        "window_focus" => handle_window_focus(state).await,
         "diff_screenshot" => handle_diff_screenshot(cmd, state).await,
         "video_start" => handle_video_start(cmd, state).await,
         "video_stop" => handle_video_stop(state).await,
@@ -2750,6 +2756,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         lifecycle_reused,
         lifecycle_launched,
         lifecycle_relaunched_browser,
+        action,
     );
 
     // Re-drain so a dialog opened by THIS command is reflected in the warning
@@ -2763,6 +2770,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             lifecycle_reused,
             lifecycle_launched,
             lifecycle_relaunched_browser,
+            action,
         );
     }
 
@@ -4387,6 +4395,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     } else {
         load_storage_state(state, &storage_state_owned).await?;
         state.effective_ca_cert = effective_ca_cert;
+        focus_headed_window_if_requested(cmd, state, local_launch).await;
         return Ok(json!({ "launched": true, "reused": true, "relaunchedBrowser": false }));
     }
     state.ref_map.clear();
@@ -4596,8 +4605,30 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     // normal browser traffic. Explicit storage state wins over auto-restore.
     load_storage_state_or_rollback(state, &storage_state_owned).await?;
     state.effective_ca_cert = effective_ca_cert;
+    focus_headed_window_if_requested(cmd, state, local_launch).await;
 
     Ok(json!({ "launched": true, "relaunchedBrowser": had_browser_before_launch }))
+}
+
+/// Raise a daemon-owned window when this command explicitly asked for headed mode.
+///
+/// Follow-up commands omit `headless` so they do not steal focus. Reusing an
+/// already-headed browser must still surface the window; relaunching would
+/// drop the page the human is looking at.
+async fn focus_headed_window_if_requested(
+    cmd: &Value,
+    state: &mut DaemonState,
+    local_launch: bool,
+) {
+    if !local_launch || cmd.get("headless").and_then(|v| v.as_bool()) != Some(false) {
+        return;
+    }
+    let Some(ref mgr) = state.browser else {
+        return;
+    };
+    if mgr.focus_window().await.is_ok() {
+        state.announce_window_focused = true;
+    }
 }
 
 async fn launch_ios(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -9573,6 +9604,13 @@ async fn handle_waitfordownload(cmd: &Value, state: &DaemonState) -> Result<Valu
     }
 }
 
+async fn handle_window_focus(state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    mgr.focus_window().await?;
+    state.announce_window_focused = true;
+    Ok(json!({ "focused": true }))
+}
+
 async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let (tab_id, session_id) = {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
@@ -11565,10 +11603,11 @@ fn success_response(id: &str, data: Value) -> Value {
 
 fn inject_lifecycle(
     resp: &mut Value,
-    state: &DaemonState,
+    state: &mut DaemonState,
     reused: bool,
     launched: bool,
     relaunched_browser: bool,
+    action: &str,
 ) {
     if resp.get("success").and_then(|v| v.as_bool()) != Some(true) {
         return;
@@ -11610,6 +11649,17 @@ fn inject_lifecycle(
             }
         }),
     );
+    if state.announce_window_focused {
+        if let Some(lifecycle) = obj.get_mut("lifecycle").and_then(|v| v.as_object_mut()) {
+            lifecycle.insert("windowFocused".to_string(), json!(true));
+        }
+        // `open --headed` launches, then navigates. Keep the flag through the
+        // launch response (the CLI does not print it) and report it on the
+        // following command.
+        if action != "launch" {
+            state.announce_window_focused = false;
+        }
+    }
 }
 
 fn error_response(id: &str, error: &str) -> Value {

@@ -4,7 +4,7 @@ Monitor agent-browser sessions in real time with a local web dashboard showing a
 
 ## Usage
 
-The dashboard is bundled into the binary and requires no separate install. Start the server and open any session:
+Release binaries bundle the dashboard, so a published install needs no separate build. A binary compiled from this repo before `pnpm build:dashboard` refuses to start instead of serving a placeholder page. Rebuild the CLI after building the dashboard. Start the server and open any session:
 
 ```bash
 agent-browser dashboard start

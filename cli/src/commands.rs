@@ -1550,16 +1550,17 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // === Window ===
         "window" => {
-            const VALID: &[&str] = &["new"];
+            const VALID: &[&str] = &["new", "focus"];
             match rest.first().copied() {
                 Some("new") => Ok(json!({ "id": id, "action": "window_new" })),
+                Some("focus") => Ok(json!({ "id": id, "action": "window_focus" })),
                 Some(sub) => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
                     valid_options: VALID,
                 }),
                 None => Err(ParseError::MissingArguments {
                     context: "window".to_string(),
-                    usage: "window <new>",
+                    usage: "window <new|focus>",
                 }),
             }
         }
@@ -3260,6 +3261,12 @@ mod tests {
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn test_window_focus() {
+        let cmd = parse_command(&args("window focus"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "window_focus");
     }
 
     // === Cookies Tests ===

@@ -97,6 +97,7 @@ const TOOL_TAB_LIST: &str = "agent_browser_tab_list";
 const TOOL_TAB_SWITCH: &str = "agent_browser_tab_switch";
 const TOOL_TAB_CLOSE: &str = "agent_browser_tab_close";
 const TOOL_WINDOW_NEW: &str = "agent_browser_window_new";
+const TOOL_WINDOW_FOCUS: &str = "agent_browser_window_focus";
 const TOOL_FRAME_SWITCH: &str = "agent_browser_frame_switch";
 const TOOL_FRAME_MAIN: &str = "agent_browser_frame_main";
 const TOOL_DIALOG_STATUS: &str = "agent_browser_dialog_status";
@@ -451,6 +452,7 @@ const TABS_PROFILE_TOOLS: &[&str] = &[
     TOOL_TAB_SWITCH,
     TOOL_TAB_CLOSE,
     TOOL_WINDOW_NEW,
+    TOOL_WINDOW_FOCUS,
     TOOL_FRAME_SWITCH,
     TOOL_FRAME_MAIN,
     TOOL_DIALOG_STATUS,
@@ -1242,6 +1244,13 @@ fn parity_tools() -> Vec<Value> {
             TOOL_WINDOW_NEW,
             "Window new",
             "Open a new browser window.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            TOOL_WINDOW_FOCUS,
+            "Window focus",
+            "Raise the headed browser window. Chrome activates its own window, so macOS assistive access is not required. Fails when the browser is headless.",
             json!({}),
             &[],
         ),
@@ -2209,6 +2218,7 @@ fn call_tool(params: Option<&Value>, config: &McpConfig) -> Result<Value, Protoc
         TOOL_TAB_SWITCH => call_one_string(arguments, "tab", "tab"),
         TOOL_TAB_CLOSE => call_optional_one(arguments, &["tab", "close"], "tab"),
         TOOL_WINDOW_NEW => call_literal(arguments, &["window", "new"]),
+        TOOL_WINDOW_FOCUS => call_literal(arguments, &["window", "focus"]),
         TOOL_FRAME_SWITCH => call_one_string(arguments, "frame", "frame"),
         TOOL_FRAME_MAIN => call_literal(arguments, &["frame", "main"]),
         TOOL_DIALOG_STATUS => call_literal(arguments, &["dialog", "status"]),

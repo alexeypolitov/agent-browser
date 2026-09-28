@@ -1844,6 +1844,49 @@ impl BrowserManager {
         Ok(())
     }
 
+    /// Unminimize and activate the headed window.
+    ///
+    /// `Page.bringToFront` runs inside Chrome, so the browser raises its own
+    /// window. That does not need macOS assistive access, which an agent
+    /// process usually does not have. A headless daemon-owned browser has no
+    /// window to raise.
+    pub async fn focus_window(&self) -> Result<(), String> {
+        if self.browser_process.is_some() && self.headless {
+            return Err(
+                "browser is headless, so there is no window to raise. Relaunch with --headed"
+                    .to_string(),
+            );
+        }
+        if let Ok(target_id) = self.active_target_id() {
+            if let Ok(window_info) = self
+                .client
+                .send_command(
+                    "Browser.getWindowForTarget",
+                    Some(json!({ "targetId": target_id })),
+                    None,
+                )
+                .await
+            {
+                if let Some(window_id) = window_info.get("windowId").and_then(|v| v.as_i64()) {
+                    // Restore a minimized window. Failure is non-fatal: activation
+                    // below still asks Chrome to show the tab.
+                    let _ = self
+                        .client
+                        .send_command(
+                            "Browser.setWindowBounds",
+                            Some(json!({
+                                "windowId": window_id,
+                                "bounds": { "windowState": "normal" }
+                            })),
+                            None,
+                        )
+                        .await;
+                }
+            }
+        }
+        self.bring_to_front().await
+    }
+
     pub async fn set_timezone(&self, timezone_id: &str) -> Result<(), String> {
         let session_id = self.active_session_id()?;
         self.client

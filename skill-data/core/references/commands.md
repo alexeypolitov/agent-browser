@@ -211,6 +211,7 @@ agent-browser tab close                        # Close current tab
 agent-browser tab close t2                     # Close tab by id
 agent-browser tab close docs                   # Close tab by label
 agent-browser window new                       # New window
+agent-browser window focus                     # Raise the headed window
 ```
 
 Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused within a session, so the same id keeps referring to the same tab across commands. Positional integers are **not** accepted — `tab 2` errors with a teaching message; use `t2`.

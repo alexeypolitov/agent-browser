@@ -706,6 +706,10 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             }
             return;
         }
+        if action == Some("window_focus") {
+            println!("{} Raised browser window", color::success_indicator());
+            return;
+        }
         // Tab switch
         if action == Some("tab_switch") {
             if let Some(tab_id) = data.get("tabId").and_then(|v| v.as_str()) {
@@ -1353,6 +1357,13 @@ fn print_lifecycle_note(data: &serde_json::Value) {
         parts.push("relaunched browser".to_string());
     } else if launched && !reused {
         parts.push("launched browser".to_string());
+    }
+    if lifecycle
+        .get("windowFocused")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        parts.push("raised window".to_string());
     }
 
     if let Some(status) = lifecycle.get("restoreStatus").and_then(|v| v.as_str()) {
@@ -2474,6 +2485,7 @@ Manage browser windows.
 
 Operations:
   new                  Open new browser window
+  focus                Raise the headed window
 
 Global Options:
   --json               Output as JSON
@@ -2481,6 +2493,7 @@ Global Options:
 
 Examples:
   agent-browser window new
+  agent-browser window focus
 "##
         }
 
@@ -2957,7 +2970,9 @@ Usage: agent-browser dashboard [start|stop] [options]
 
 Manage the observability dashboard, a local web UI that shows live
 browser viewports and command activity feeds for all sessions.
-The dashboard is bundled into the binary and requires no separate install.
+The dashboard is bundled into release binaries and requires no separate install.
+A binary built from this repo before `pnpm build:dashboard` refuses to start
+instead of serving a placeholder page. Rebuild the CLI after building the dashboard.
 
 Subcommands:
   start [--port <n>]   Start the dashboard server (default port: 4848)

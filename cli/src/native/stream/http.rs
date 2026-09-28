@@ -17,6 +17,26 @@ use super::discovery::discover_sessions;
 #[folder = "../packages/dashboard/out/"]
 struct DashboardAssets;
 
+/// Marker written by `cli/build.rs` when `packages/dashboard/out` has no real build.
+const DASHBOARD_NOT_BUILT_MARKER: &str = "Dashboard not built";
+
+pub const DASHBOARD_NOT_BUILT_MESSAGE: &str = "Dashboard assets are not built into this binary. From the repository root run `pnpm build:dashboard`, then rebuild the CLI so the assets are embedded. Installs from npm already include the dashboard.";
+
+pub fn dashboard_index_is_placeholder(html: &[u8]) -> bool {
+    std::str::from_utf8(html).is_ok_and(|text| text.contains(DASHBOARD_NOT_BUILT_MARKER))
+}
+
+/// `Some` when this binary would serve the compile-time placeholder instead of the dashboard UI.
+pub fn embedded_dashboard_placeholder_error() -> Option<&'static str> {
+    match DashboardAssets::get("index.html") {
+        Some(file) if dashboard_index_is_placeholder(&file.data) => {
+            Some(DASHBOARD_NOT_BUILT_MESSAGE)
+        }
+        None => Some(DASHBOARD_NOT_BUILT_MESSAGE),
+        Some(_) => None,
+    }
+}
+
 pub(super) const CORS_HEADERS: &str = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n";
 
 /// Build CORS headers that reflect the request origin only when it passes
@@ -480,6 +500,15 @@ pub(super) fn serve_embedded_file(url_path: &str) -> (&'static str, &'static str
 mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
+
+    #[test]
+    fn dashboard_placeholder_marker_is_detected() {
+        let stub = b"<p>Dashboard not built. Run: cd packages/dashboard &amp;&amp; pnpm build</p>";
+        assert!(dashboard_index_is_placeholder(stub));
+        assert!(!dashboard_index_is_placeholder(
+            b"<!DOCTYPE html><html><body><div id=\"root\"></div></body></html>"
+        ));
+    }
     use std::sync::Arc;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
