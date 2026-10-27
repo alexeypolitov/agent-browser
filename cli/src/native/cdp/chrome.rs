@@ -1620,6 +1620,7 @@ pub fn copy_chrome_profile(
 
 /// Copies a Chrome profile into `dest`, creating the directory if needed.
 /// `dest` becomes a user-data-dir containing `Local State` and `profile_directory`.
+/// A copied `Preferences` with `profile.exit_type` of `Crashed` is set to `Normal`, best effort.
 pub fn copy_chrome_profile_into(
     user_data_dir: &Path,
     profile_directory: &str,
@@ -1650,6 +1651,25 @@ pub fn copy_chrome_profile_into(
     if let Err(e) = copy_dir_recursive(&src_profile, &dst_profile) {
         let _ = std::fs::remove_dir_all(dest);
         return Err(format!("Failed to copy profile: {}", e));
+    }
+
+    let preferences_path = dst_profile.join("Preferences");
+    let normalized = (|| {
+        let bytes = std::fs::read(&preferences_path).ok()?;
+        let mut preferences: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let exit_type = preferences.pointer_mut("/profile/exit_type")?;
+        if exit_type.as_str() != Some("Crashed") {
+            return None;
+        }
+        *exit_type = serde_json::Value::String("Normal".to_string());
+        serde_json::to_vec(&preferences).ok()
+    })();
+    if let Some(bytes) = normalized {
+        let candidate = dst_profile.join(format!(".Preferences-{}.tmp", uuid::Uuid::new_v4()));
+        if std::fs::write(&candidate, bytes).is_ok() {
+            let _ = std::fs::rename(&candidate, &preferences_path);
+        }
+        let _ = std::fs::remove_file(&candidate);
     }
 
     Ok(())
@@ -2984,6 +3004,51 @@ exec sleep 60
             "fake-leveldb"
         );
         assert!(!temp.join("Default/Cache").exists());
+    }
+
+    #[test]
+    fn test_copy_chrome_profile_normalizes_crashed_exit_type() {
+        let compact = r#"{"a":1,"profile":{"exit_type":"Crashed","name":"x"}}"#;
+        let spaced = "{ \"profile\": { \"exit_type\" : \"Crashed\" } }";
+        for (name, prefs, normalized) in [
+            ("compact", Some(compact), true),
+            ("spaced", Some(spaced), true),
+            (
+                "normal",
+                Some(r#"{"profile":{"exit_type":"Normal"}}"#),
+                false,
+            ),
+            ("missing-field", Some(r#"{"profile":{}}"#), false),
+            (
+                "malformed",
+                Some(r#"{"profile":{"exit_type":"Crashed""#),
+                false,
+            ),
+            ("missing-file", None, false),
+        ] {
+            let src = TempDir::new(&format!("copy-exit-{name}"));
+            create_fake_local_state(&src, &[("Default", "Person 1")]);
+            create_fake_profile(&src, "Default");
+            if let Some(p) = prefs {
+                std::fs::write(src.join("Default/Preferences"), p).unwrap();
+            }
+            let temp = TempDir(copy_chrome_profile(&src, "Default").unwrap());
+            let copied = std::fs::read(temp.join("Default/Preferences")).ok();
+            match prefs {
+                None => assert!(copied.is_none(), "{name}"),
+                Some(p) if normalized => {
+                    let mut want: serde_json::Value = serde_json::from_str(p).unwrap();
+                    want["profile"]["exit_type"] = "Normal".into();
+                    let got: serde_json::Value = serde_json::from_slice(&copied.unwrap()).unwrap();
+                    assert_eq!(got, want, "{name}");
+                }
+                Some(p) => assert_eq!(copied.unwrap(), p.as_bytes(), "{name}"),
+            }
+            if let Some(p) = prefs {
+                let source = std::fs::read(src.join("Default/Preferences")).unwrap();
+                assert_eq!(source, p.as_bytes(), "{name}");
+            }
+        }
     }
 
     #[test]
