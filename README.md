@@ -672,6 +672,8 @@ Common tools include:
 
 Each tool has typed fields such as `url`, `selector`, `text`, `key`, `session`, and `allowedDomains`, so MCP clients show meaningful approval prompts instead of raw command arrays. The common `allowedDomains` array maps to `--allowed-domains` and activates the same WebRTC containment and launch-mode restrictions. Each tool also accepts `extraArgs` for per-command options and display or emulation flags such as `--engine`, but global flags that change network, file, policy, or host access (such as `--allowed-domains`, `--action-policy`, `--executable-path`, `--args`, and `--config`) are rejected and must be set in the MCP server's environment or config. Tool discovery is paginated and includes read-only/open-world annotations so modern MCP clients can load the large typed surface incrementally.
 
+The common `seed` string clones a saved login seed (`--seed`) and `noSeed` drops the server's default seed (`--no-seed`). Tools cannot choose a Chrome profile per call; set `AGENT_BROWSER_PROFILE` or `profile` in the MCP server's environment or config. `extraArgs` rejects `--profile`, `--seed`, and `--no-seed`.
+
 Example MCP client config:
 
 ```json

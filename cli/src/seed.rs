@@ -176,7 +176,7 @@ pub fn mcp_defaults_instructions() -> String {
     let mut line = format!("Defaults: {}.", parts.join(" "));
     if d["seed"].is_string() && d["seedStatus"].as_str() == Some("ok") {
         line.push_str(
-            " Do not pass --profile; each session clones this seed. Override with tool seed/profile or extraArgs --no-seed.",
+            " Each session clones this seed. Override with tool seed, or noSeed for the server profile or a blank one.",
         );
     } else if d["profile"].is_string() {
         line.push_str(
@@ -566,7 +566,7 @@ mod tests {
         assert!(text.contains("namespace=work"), "{text}");
         assert!(text.contains("seed=work"), "{text}");
         assert!(
-            text.contains("MISSING") || text.contains("Do not pass --profile"),
+            text.contains("MISSING") || text.contains("Each session clones this seed"),
             "{text}"
         );
     }

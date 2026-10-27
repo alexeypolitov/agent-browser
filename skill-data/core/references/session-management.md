@@ -86,7 +86,7 @@ agent-browser --seed mylogin --session b open https://drive.google.com
 
 `--seed` and `--profile` together is an error unless one side is only env/config: explicit `--profile` overrides `AGENT_BROWSER_SEED`, explicit `--seed` overrides `AGENT_BROWSER_PROFILE`. Pass `--no-seed` to ignore an env seed.
 
-MCP clients should read initialize instructions or `agent_browser_tools_profiles` defaults for the configured seed. If `seed=` is set, omit `--profile`.
+MCP clients should read initialize instructions or `agent_browser_tools_profiles` defaults for the configured seed. If `seed=` is set, each session clones it. MCP tool calls can switch seeds with the typed `seed` argument or drop it with `noSeed`, but cannot choose a Chrome profile; set `AGENT_BROWSER_PROFILE` in the MCP server environment or config instead.
 
 ## Session State Persistence
 

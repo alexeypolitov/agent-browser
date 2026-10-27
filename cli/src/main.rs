@@ -1047,7 +1047,7 @@ fn dashboard_config_issue(
 fn run_dashboard_start(port: u16, allowed_origins: Vec<String>, json_mode: bool) {
     if let Some(msg) = native::stream::embedded_dashboard_placeholder_error() {
         if json_mode {
-            print_json_error(msg.to_string());
+            print_json_error(msg);
         } else {
             eprintln!("{} {}", color::error_indicator(), msg);
         }

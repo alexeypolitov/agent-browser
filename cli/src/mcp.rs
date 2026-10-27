@@ -2059,21 +2059,14 @@ fn tool(name: &str, title: &str, description: &str, properties: Value, required:
         "seed".to_string(),
         json!({
             "type": "string",
-            "description": "Frozen login seed name (agent-browser seed save). Explicit value overrides AGENT_BROWSER_SEED. Omit to keep the env/config default. Do not combine with profile."
-        }),
-    );
-    props.insert(
-        "profile".to_string(),
-        json!({
-            "type": "string",
-            "description": "Chrome profile name or path. Explicit value overrides AGENT_BROWSER_SEED. Omit to keep env/config defaults. Prefer seed for parallel logged-in sessions."
+            "description": "Frozen login seed name (agent-browser seed save). Explicit value overrides AGENT_BROWSER_SEED and the server's profile. Omit to keep the env/config default. Chrome profiles are not selectable per call; the operator sets AGENT_BROWSER_PROFILE in the MCP server environment or config."
         }),
     );
     props.insert(
         "noSeed".to_string(),
         json!({
             "type": "boolean",
-            "description": "Clear AGENT_BROWSER_SEED for this command (--no-seed). Use when you want a blank profile or an explicit profile instead of the MCP default seed."
+            "description": "Clear AGENT_BROWSER_SEED for this command (--no-seed). Use when you want a blank profile, or the server's configured profile, instead of the MCP default seed."
         }),
     );
     props.insert(
@@ -3970,15 +3963,9 @@ fn append_common_global_args(
     }
 
     let seed = optional_string(arguments, "seed")?;
-    let profile = optional_string(arguments, "profile")?;
     let no_seed = optional_bool(arguments, "noSeed")?.unwrap_or(false);
     if no_seed && seed.is_some() {
         return Err(ProtocolError::invalid_params("Cannot use seed with noSeed"));
-    }
-    if seed.is_some() && profile.is_some() {
-        return Err(ProtocolError::invalid_params(
-            "Cannot use seed with profile. Omit profile to clone the seed, or pass noSeed to use profile.",
-        ));
     }
     if no_seed {
         args.push("--no-seed".to_string());
@@ -3986,10 +3973,6 @@ fn append_common_global_args(
     if let Some(seed) = seed {
         args.push("--seed".to_string());
         args.push(seed);
-    }
-    if let Some(profile) = profile {
-        args.push("--profile".to_string());
-        args.push(profile);
     }
 
     if let Some(restore) = arguments.get("restore") {
@@ -5690,7 +5673,7 @@ mod tests {
     }
 
     #[test]
-    fn common_global_args_include_seed_and_profile() {
+    fn common_global_args_include_seed_and_no_seed() {
         let mut args = Vec::new();
         append_common_global_args(
             &mut args,
@@ -5706,32 +5689,60 @@ mod tests {
         append_common_global_args(
             &mut args,
             &json!({
-                "profile": "Default",
                 "noSeed": true,
             }),
             None,
         )
         .unwrap();
-        assert_eq!(args, vec!["--no-seed", "--profile", "Default"]);
+        assert_eq!(args, vec!["--no-seed"]);
     }
 
     #[test]
-    fn common_global_args_reject_seed_with_profile() {
+    fn common_global_args_reject_seed_with_no_seed() {
         let mut args = Vec::new();
         let error = append_common_global_args(
             &mut args,
             &json!({
                 "seed": "work",
-                "profile": "Default"
+                "noSeed": true
             }),
             None,
         )
         .unwrap_err();
-        assert!(error.message.contains("Cannot use seed with profile"));
+        assert!(error.message.contains("Cannot use seed with noSeed"));
     }
 
     #[test]
-    fn tool_schema_includes_seed_profile_no_seed() {
+    fn mcp_callers_cannot_select_a_chrome_profile_or_seed_via_extra_args() {
+        let err = call_tool(
+            Some(&json!({
+                "name": TOOL_OPEN,
+                "arguments": { "url": "https://example.com", "profile": "Default" }
+            })),
+            &McpConfig::default(),
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("Unknown argument(s)"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("profile"), "{}", err.message);
+
+        for bad in [
+            vec!["--profile", "Default"],
+            vec!["--profile=Default"],
+            vec!["--seed", "work"],
+            vec!["--no-seed"],
+        ] {
+            let arguments = json!({ "extraArgs": bad });
+            let error = cli_tool_args(&arguments, vec!["open".to_string()], None).unwrap_err();
+            assert!(error.message.contains("extraArgs may not set"), "{:?}", bad);
+        }
+    }
+
+    #[test]
+    fn tool_schema_includes_seed_no_seed_without_profile() {
         let tools = tools();
         let open = tools
             .iter()
@@ -5739,7 +5750,7 @@ mod tests {
             .unwrap();
         let props = &open["inputSchema"]["properties"];
         assert_eq!(props["seed"]["type"], "string");
-        assert_eq!(props["profile"]["type"], "string");
+        assert!(props.get("profile").is_none());
         assert_eq!(props["noSeed"]["type"], "boolean");
     }
 }
